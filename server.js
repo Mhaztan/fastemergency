@@ -52,27 +52,20 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const JWT_SECRET = process.env.JWT_SECRET || 'your_jwt_secret';
 
-// Configure CORS to allow only your production domain and localhost
-const allowedOrigins = process.env.ALLOWED_ORIGINS.split(',');
+app.use(bodyParser.json());
+
+const allowedOrigins = ['https://fastemergency.com.ng', 'https://fire-escape1.web.app']; // add any other origins you need
 app.use(cors({
   origin: function (origin, callback) {
     // Allow requests with no origin (like mobile apps or curl requests)
     if (!origin) return callback(null, true);
     if (allowedOrigins.indexOf(origin) === -1) {
-      const msg = `The CORS policy for this site does not allow access from the specified Origin: ${origin}`;
-      return callback(new Error(msg), false);
+      return callback(new Error(`The CORS policy for this site does not allow access from the specified origin: ${origin}`), false);
     }
     return callback(null, true);
   }
 }));
 
-app.use(bodyParser.json());
-
-//Enable for specified origin:
-const corsOptions = {
-  origin: 'http://127.0.0.1:5500' // Replace with your frontend's origin
-};
-app.use(cors(corsOptions));
 
 /* ---------------------------
    Helper Middleware: JWT Authentication

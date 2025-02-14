@@ -68,6 +68,12 @@ app.use(cors({
 
 app.use(bodyParser.json());
 
+//Enable for specified origin:
+const corsOptions = {
+  origin: 'http://127.0.0.1:5500' // Replace with your frontend's origin
+};
+app.use(cors(corsOptions));
+
 /* ---------------------------
    Helper Middleware: JWT Authentication
 --------------------------- */
@@ -476,6 +482,193 @@ app.get('/api/withdrawal/history', authenticateToken, async (req, res) => {
     res.status(500).json({ error: 'Failed to fetch withdrawal history.' });
   }
 });
+
+/*******************
+ * ADMIN ROUTES
+ *******************/
+
+// Admin authentication middleware
+function authenticateAdmin(req, res, next) {
+  const authHeader = req.headers['authorization'];
+  if (!authHeader)
+    return res.status(401).json({ error: 'Authorization header missing' });
+  const token = authHeader.split(' ')[1];
+  if (!token)
+    return res.status(401).json({ error: 'Token missing' });
+
+  jwt.verify(token, JWT_SECRET, (err, decoded) => {
+    if (err) return res.status(403).json({ error: 'Invalid token' });
+    if (!decoded.role || decoded.role !== 'admin') {
+      return res.status(403).json({ error: 'Admin access required' });
+    }
+    req.admin = decoded;
+    next();
+  });
+}
+
+// Updated Admin Login Endpoint
+// POST /api/admin/login
+// Expects { email, password } in the request body.
+app.post('/api/admin/login', async (req, res) => {
+  const { email, password } = req.body;
+  if (!email || !password)
+    return res.status(400).json({ error: 'Email and password required.' });
+
+  try {
+    const adminsRef = db.ref('admins');
+    // Query the "admins" node for a record matching the provided email
+    const snapshot = await adminsRef.orderByChild('email').equalTo(email).once('value');
+
+    if (!snapshot.exists()) {
+      return res.status(401).json({ error: 'Invalid credentials.' });
+    }
+
+    // Assuming the email is unique, grab the first admin record.
+    const admins = snapshot.val();
+    const adminId = Object.keys(admins)[0];
+    const adminData = admins[adminId];
+
+    // Verify the password using bcrypt.
+    const validPassword = await bcrypt.compare(password, adminData.password);
+    if (!validPassword) {
+      return res.status(401).json({ error: 'Invalid credentials.' });
+    }
+
+    // Generate a JWT token with an admin role.
+    const token = jwt.sign({ uid: adminId, email: adminData.email, role: 'admin' }, JWT_SECRET, { expiresIn: '4h' });
+    return res.json({ token });
+
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
+  }
+});
+
+// Get Admin Analytics
+// GET /api/admin/analytics
+// Returns total number of users and cumulative earnings.
+app.get('/api/admin/analytics', authenticateAdmin, async (req, res) => {
+  try {
+    const snapshot = await db.ref('users').once('value');
+    const usersData = snapshot.val() || {};
+    const userCount = Object.keys(usersData).length;
+    let totalEarnings = 0;
+    Object.values(usersData).forEach(user => {
+      totalEarnings += user.earnings || 0;
+    });
+    res.json({ userCount, totalEarnings });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// List All Users with Basic Info & Delete Option
+// GET /api/admin/users
+app.get('/api/admin/users', authenticateAdmin, async (req, res) => {
+  try {
+    const snapshot = await db.ref('users').once('value');
+    const usersData = snapshot.val() || {};
+    const users = Object.keys(usersData).map(uid => ({
+      uid,
+      name: usersData[uid].name,
+      email: usersData[uid].email,
+      earnings: usersData[uid].earnings,
+      referralCode: usersData[uid].referralCode
+    }));
+    res.json(users);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Delete a User
+// DELETE /api/admin/users/:uid
+app.delete('/api/admin/users/:uid', authenticateAdmin, async (req, res) => {
+  const uid = req.params.uid;
+  try {
+    await db.ref(`users/${uid}`).remove();
+    res.json({ message: `User ${uid} deleted successfully.` });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get Pending Withdrawal Requests
+// GET /api/admin/withdrawals/pending
+app.get('/api/admin/withdrawals/pending', authenticateAdmin, async (req, res) => {
+  try {
+    const snapshot = await db.ref('users').once('value');
+    const usersData = snapshot.val() || {};
+    const pendingWithdrawals = [];
+    Object.keys(usersData).forEach(uid => {
+      const user = usersData[uid];
+      if (user.withdrawalRequests) {
+        Object.keys(user.withdrawalRequests).forEach(requestId => {
+          const request = user.withdrawalRequests[requestId];
+          if (request.status === 'pending') {
+            pendingWithdrawals.push({
+              uid,
+              requestId,
+              ...request
+            });
+          }
+        });
+      }
+    });
+    res.json(pendingWithdrawals);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/********************************************************
+// Approve / Update Withdrawal Request
+// PUT /api/admin/withdrawals/:uid/:requestId
+// Expects { status } in the request body (e.g., "approved" or "sent").
+// *******************************************************/
+app.put('/api/admin/withdrawals/:uid/:requestId', authenticateAdmin, async (req, res) => {
+  const { uid, requestId } = req.params;
+  const { status } = req.body;
+  if (!status) return res.status(400).json({ error: 'New status required.' });
+  try {
+    const withdrawalRef = db.ref(`users/${uid}/withdrawalRequests/${requestId}`);
+    const snapshot = await withdrawalRef.once('value');
+    if (!snapshot.exists()) {
+      return res.status(404).json({ error: 'Withdrawal request not found.' });
+    }
+    await withdrawalRef.update({ status });
+    res.json({ message: 'Withdrawal request updated.', requestId, newStatus: status });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// // This route creates an admin user in the Firebase Realtime Database.
+// // IMPORTANT: Protect this endpoint in production (e.g., require a secret key).
+// Simplified route to create an admin user (FOR DEVELOPMENT ONLY)
+app.post('/api/admin/create', async (req, res) => {
+  const { name, email, password } = req.body;
+  if (!name || !email || !password) {
+    return res.status(400).json({ error: 'Name, email, and password are required.' });
+  }
+
+  try {
+    const hashedPassword = await bcrypt.hash(password, 10); // Hash the password
+
+    const adminRef = db.ref('admins'); // Firebase reference
+    const newAdminRef = adminRef.push();  // Push to create a unique key
+    const adminId = newAdminRef.key;
+    await newAdminRef.set({
+      name,
+      email,
+      password: hashedPassword
+    });
+
+    res.json({ message: 'Admin user created successfully.', adminId });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 
 /* ---------------------------
    Helper Function: Generate a Unique Referral Code

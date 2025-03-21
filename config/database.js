@@ -3,12 +3,13 @@ const mysql = require('mysql2/promise'); // Use promise-based MySQL library
 const config = require('./config'); // Load configuration
 
 const pool = mysql.createPool({
-    host: config.dbHost,
-    user: config.dbUser,
-    password: config.dbPassword,
-    database: config.dbName,
-    dbPort: config.dbPort,
-    ssl: config.ssl,
+    // host: config.dbHost,
+    // user: config.dbUser,
+    // password: config.dbPassword,
+    // database: config.dbName,
+    // dbPort: config.dbPort,
+    // ssl: config.ssl,
+    url: config.dbURL,
     waitForConnections: true,
     connectionLimit: 10, // Adjust as needed
     queueLimit: 0

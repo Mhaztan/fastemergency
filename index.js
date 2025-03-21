@@ -14,7 +14,10 @@ const config = require('./config/config');
 const app = express();
 
 // Middleware
-app.use(cors()); // Enable CORS for all origins (adjust as needed)
+app.use(cors({
+    origin: '*',
+    credentials: true
+})); // Enable CORS for all origins (adjust as needed)
 app.use(express.json()); // Parse JSON request bodies
 
 // Apply i18n middleware - before all routes
